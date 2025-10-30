@@ -38,6 +38,23 @@ interface CleaningTaskView {
   message: string | null | undefined;
 }
 
+interface EmpleadoResponse {
+  id: number;
+  tipoId: string;
+  nombreCompleto: string;
+}
+
+interface AsistenciaTurnoResponse {
+  id: number;
+  empleado: EmpleadoResponse | null;
+  horaEntradaAsignada: string | null;
+  horaSalidaAsignada: string | null;
+  horaEntradaReal: string | null;
+  horaSalidaReal: string | null;
+  minutosRetraso: number;
+  minutosTrabajados: number;
+}
+
 @Component({
   selector: 'app-root',
   standalone: true,
@@ -237,6 +254,79 @@ interface CleaningTaskView {
           Genera una tarea para ver el registro más reciente asociado a la habitación seleccionada.
         </p>
       </section>
+
+      <section class="card">
+        <div class="card-header">
+          <h2>Gestión de asistencia</h2>
+        </div>
+
+        <form class="form-grid" [formGroup]="attendanceForm" (ngSubmit)="registerEntry()">
+          <h3>Registrar asistencia de un colaborador</h3>
+          <div class="form-row">
+            <label for="employeeId">Empleado (ID numérico)</label>
+            <input
+              id="employeeId"
+              type="number"
+              min="1"
+              formControlName="employeeId"
+              placeholder="Ej. 12"
+              [class.invalid]="fieldInvalid(attendanceForm, 'employeeId')"
+            />
+            <small *ngIf="fieldInvalid(attendanceForm, 'employeeId')">
+              Debes ingresar un identificador válido.
+            </small>
+          </div>
+
+          <div class="attendance-actions">
+            <button type="submit" [disabled]="isAttendanceLoading('entrada')">
+              {{ isAttendanceLoading('entrada') ? 'Registrando entrada…' : 'Registrar entrada' }}
+            </button>
+            <button
+              type="button"
+              (click)="registerExit()"
+              [disabled]="isAttendanceLoading('salida')"
+            >
+              {{ isAttendanceLoading('salida') ? 'Registrando salida…' : 'Registrar salida' }}
+            </button>
+          </div>
+        </form>
+
+        <p *ngIf="attendanceError()" class="error">{{ attendanceError() }}</p>
+        <p *ngIf="attendanceMessage()" class="info">{{ attendanceMessage() }}</p>
+
+        <div class="table-wrapper" *ngIf="attendanceRecords().length">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Empleado</th>
+                <th>Entrada asignada</th>
+                <th>Entrada real</th>
+                <th>Salida asignada</th>
+                <th>Salida real</th>
+                <th>Retraso (min)</th>
+                <th>Trabajados (min)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr *ngFor="let record of attendanceRecords(); trackBy: trackByAttendanceId">
+                <td>{{ record.id }}</td>
+                <td>{{ record.empleado?.nombreCompleto ?? '—' }}</td>
+                <td>{{ record.horaEntradaAsignada ? (record.horaEntradaAsignada | date: 'short') : '—' }}</td>
+                <td>{{ record.horaEntradaReal ? (record.horaEntradaReal | date: 'short') : '—' }}</td>
+                <td>{{ record.horaSalidaAsignada ? (record.horaSalidaAsignada | date: 'short') : '—' }}</td>
+                <td>{{ record.horaSalidaReal ? (record.horaSalidaReal | date: 'short') : '—' }}</td>
+                <td>{{ record.minutosRetraso }}</td>
+                <td>{{ record.minutosTrabajados }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p *ngIf="!attendanceRecords().length && !attendanceError()" class="hint">
+          Registra entradas o salidas para ver el historial del día.
+        </p>
+      </section>
     </main>
   `,
   styles: []
@@ -267,6 +357,11 @@ export class App implements OnInit {
   protected readonly cleaningError = signal<string | null>(null);
   protected readonly cleaningMessage = signal<string | null>(null);
 
+  protected readonly attendanceRecords = signal<AsistenciaTurnoResponse[]>([]);
+  protected readonly attendanceLoading = signal<'entrada' | 'salida' | null>(null);
+  protected readonly attendanceError = signal<string | null>(null);
+  protected readonly attendanceMessage = signal<string | null>(null);
+
   protected readonly taskForm = this.fb.group({
     description: ['', Validators.required],
     assignedEmployee: ['', Validators.required],
@@ -277,6 +372,10 @@ export class App implements OnInit {
     hotelName: ['', Validators.required],
     roomCode: ['', Validators.required],
     newStatus: [{ value: 'Disponible', disabled: false }, Validators.required]
+  });
+
+  protected readonly attendanceForm = this.fb.group({
+    employeeId: ['', Validators.required]
   });
 
   ngOnInit(): void {
@@ -453,11 +552,63 @@ export class App implements OnInit {
     return !!control && control.invalid && (control.dirty || control.touched);
   }
 
+  protected isAttendanceLoading(type: 'entrada' | 'salida'): boolean {
+    return this.attendanceLoading() === type;
+  }
+
+  protected registerEntry(): void {
+    this.handleAttendanceRequest('entrada');
+  }
+
+  protected registerExit(): void {
+    this.handleAttendanceRequest('salida');
+  }
+
+  protected trackByAttendanceId(_: number, record: AsistenciaTurnoResponse): number {
+    return record.id;
+  }
+
   private buildStatusSelections(tasks: TaskResponse[]): Partial<Record<string, string>> {
     return tasks.reduce((acc, task) => {
       acc[task.taskId] = task.status;
       return acc;
     }, {} as Partial<Record<string, string>>);
+  }
+
+  private handleAttendanceRequest(type: 'entrada' | 'salida'): void {
+    if (this.attendanceForm.invalid) {
+      this.attendanceForm.markAllAsTouched();
+      return;
+    }
+
+    const employeeIdRaw = this.attendanceForm.value.employeeId;
+    const employeeId = Number(employeeIdRaw);
+
+    if (!employeeId || Number.isNaN(employeeId) || employeeId <= 0) {
+      this.attendanceError.set('El ID de empleado debe ser un número entero positivo.');
+      return;
+    }
+
+    this.attendanceLoading.set(type);
+    this.attendanceError.set(null);
+    this.attendanceMessage.set(null);
+
+    const endpoint = `${this.apiBaseUrl}/api/asistencia/${type}/${employeeId}`;
+
+    this.http.post<AsistenciaTurnoResponse>(endpoint, {}).subscribe({
+      next: (response) => {
+        this.attendanceLoading.set(null);
+        const actionLabel = type === 'entrada' ? 'Entrada' : 'Salida';
+        this.attendanceMessage.set(`${actionLabel} registrada correctamente.`);
+        const records = [response, ...this.attendanceRecords()];
+        this.attendanceRecords.set(records);
+      },
+      error: (error) => {
+        this.attendanceLoading.set(null);
+        const message = this.resolveErrorMessage(error);
+        this.attendanceError.set(message);
+      }
+    });
   }
 
   private resolveErrorMessage(error: unknown): string {
