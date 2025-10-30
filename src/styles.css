@@ -84,25 +84,21 @@ button:not([disabled]):hover {
   box-shadow: 0 8px 18px rgba(56, 189, 248, 0.35);
 }
 
-.token-form,
-.cleaning-form {
+.form-grid {
   display: grid;
   gap: 1rem;
-}
-
-.token-input {
-  display: flex;
-  gap: 0.75rem;
-}
-
-.token-input input {
-  flex: 1;
 }
 
 .form-row {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+}
+
+.form-grid h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #cbd5f5;
 }
 
 input {
@@ -127,6 +123,29 @@ input.invalid {
 
 small {
   color: #94a3b8;
+}
+
+select {
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.6);
+  color: #e2e8f0;
+  padding: 0.65rem 0.85rem;
+  font-size: 1rem;
+}
+
+.status-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.status-actions select {
+  min-width: 150px;
+}
+
+.status-actions button {
+  padding: 0.5rem 1.2rem;
 }
 
 .table-wrapper {
@@ -181,11 +200,16 @@ small {
     align-items: flex-start;
   }
 
-  .token-input {
-    flex-direction: column;
+  button {
+    width: 100%;
   }
 
-  button {
+  .status-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .status-actions select {
     width: 100%;
   }
 }

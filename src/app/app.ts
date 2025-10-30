@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { HttpClient } from '@angular/common/http';
 import { Component, OnInit, inject, signal } from '@angular/core';
-import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
+import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 
 interface TaskResponse {
   taskId: string;
@@ -47,7 +47,7 @@ interface CleaningTaskView {
       <header class="page-header">
         <h1>Monitoreo de tareas</h1>
         <p>
-          Consulta el estado general de las tareas y genera tareas automáticas de limpieza desde un único lugar.
+          Gestiona el estado general de las tareas y genera tareas automáticas de limpieza en un solo lugar.
         </p>
       </header>
 
@@ -59,21 +59,52 @@ interface CleaningTaskView {
           </button>
         </div>
 
-        <form class="token-form" [formGroup]="tokenForm" (ngSubmit)="applyToken()">
-          <label for="token">Token JWT</label>
-          <div class="token-input">
+        <form class="form-grid" [formGroup]="taskForm" (ngSubmit)="createTask()">
+          <h3>Crear nueva tarea</h3>
+          <div class="form-row">
+            <label for="description">Descripción</label>
             <input
-              id="token"
+              id="description"
               type="text"
-              placeholder="Pega aquí un token válido para el microservicio"
-              formControlName="token"
+              placeholder="Ej. Inspeccionar habitación 205"
+              formControlName="description"
+              [class.invalid]="fieldInvalid(taskForm, 'description')"
               autocomplete="off"
             />
-            <button type="submit">Guardar token</button>
+            <small *ngIf="fieldInvalid(taskForm, 'description')">La descripción es obligatoria.</small>
           </div>
-          <small>El servicio de tareas exige autenticación. Puedes reutilizar cualquier token JWT emitido por el backend.</small>
+
+          <div class="form-row">
+            <label for="assignedEmployee">Empleado asignado</label>
+            <input
+              id="assignedEmployee"
+              type="text"
+              placeholder="Ej. Ana Torres"
+              formControlName="assignedEmployee"
+              [class.invalid]="fieldInvalid(taskForm, 'assignedEmployee')"
+              autocomplete="off"
+            />
+            <small *ngIf="fieldInvalid(taskForm, 'assignedEmployee')">Debes especificar a quién asignas la tarea.</small>
+          </div>
+
+          <div class="form-row">
+            <label for="status">Estado</label>
+            <select id="status" formControlName="status">
+              <option *ngFor="let option of statusOptions" [value]="option">
+                {{ option }}
+              </option>
+            </select>
+          </div>
+
+          <button type="submit" [disabled]="taskCreationLoading()">
+            {{ taskCreationLoading() ? 'Guardando…' : 'Crear tarea' }}
+          </button>
         </form>
 
+        <p *ngIf="taskCreationError()" class="error">{{ taskCreationError() }}</p>
+        <p *ngIf="taskCreationMessage()" class="info">{{ taskCreationMessage() }}</p>
+        <p *ngIf="taskUpdateError()" class="error">{{ taskUpdateError() }}</p>
+        <p *ngIf="taskUpdateMessage()" class="info">{{ taskUpdateMessage() }}</p>
         <p *ngIf="taskError()" class="error">{{ taskError() }}</p>
         <p *ngIf="!taskLoading() && !taskError() && !tasks().length" class="empty">
           No hay tareas registradas en este momento.
@@ -89,6 +120,7 @@ interface CleaningTaskView {
                 <th>Estado</th>
                 <th>Inicio</th>
                 <th>Fin</th>
+                <th>Actualizar estado</th>
               </tr>
             </thead>
             <tbody>
@@ -99,6 +131,25 @@ interface CleaningTaskView {
                 <td>{{ task.status }}</td>
                 <td>{{ task.startTime ? (task.startTime | date: 'short') : '—' }}</td>
                 <td>{{ task.endTime ? (task.endTime | date: 'short') : '—' }}</td>
+                <td>
+                  <div class="status-actions">
+                    <select
+                      [value]="statusSelections()[task.taskId] ?? task.status"
+                      (change)="onStatusSelect(task.taskId, $any($event.target).value)"
+                    >
+                      <option *ngFor="let option of statusOptions" [value]="option">
+                        {{ option }}
+                      </option>
+                    </select>
+                    <button
+                      type="button"
+                      (click)="updateTaskStatus(task)"
+                      [disabled]="taskUpdateLoading() === task.taskId || !shouldEnableUpdate(task.taskId, task.status)"
+                    >
+                      {{ taskUpdateLoading() === task.taskId ? 'Actualizando…' : 'Actualizar' }}
+                    </button>
+                  </div>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -110,7 +161,8 @@ interface CleaningTaskView {
           <h2>Tareas de limpieza automáticas</h2>
         </div>
 
-        <form class="cleaning-form" [formGroup]="cleaningForm" (ngSubmit)="createCleaningTask()">
+        <form class="form-grid" [formGroup]="cleaningForm" (ngSubmit)="createCleaningTask()">
+          <h3>Generar o recuperar tarea de limpieza</h3>
           <div class="form-row">
             <label for="hotelName">Hotel</label>
             <input
@@ -118,10 +170,10 @@ interface CleaningTaskView {
               type="text"
               placeholder="Ej. Hotel Central"
               formControlName="hotelName"
-              [class.invalid]="fieldInvalid('hotelName')"
+              [class.invalid]="fieldInvalid(cleaningForm, 'hotelName')"
               autocomplete="off"
             />
-            <small *ngIf="fieldInvalid('hotelName')">El nombre del hotel es obligatorio.</small>
+            <small *ngIf="fieldInvalid(cleaningForm, 'hotelName')">El nombre del hotel es obligatorio.</small>
           </div>
 
           <div class="form-row">
@@ -131,20 +183,15 @@ interface CleaningTaskView {
               type="text"
               placeholder="Ej. 305"
               formControlName="roomCode"
-              [class.invalid]="fieldInvalid('roomCode')"
+              [class.invalid]="fieldInvalid(cleaningForm, 'roomCode')"
               autocomplete="off"
             />
-            <small *ngIf="fieldInvalid('roomCode')">El código de habitación es obligatorio.</small>
+            <small *ngIf="fieldInvalid(cleaningForm, 'roomCode')">El código de habitación es obligatorio.</small>
           </div>
 
           <div class="form-row">
             <label for="newStatus">Estado tras el checkout</label>
-            <input
-              id="newStatus"
-              type="text"
-              formControlName="newStatus"
-              readonly
-            />
+            <input id="newStatus" type="text" formControlName="newStatus" readonly />
           </div>
 
           <button type="submit" [disabled]="cleaningLoading()">
@@ -198,20 +245,32 @@ export class App implements OnInit {
   private readonly http = inject(HttpClient);
   private readonly fb = inject(FormBuilder);
 
-  private authToken = '';
   private readonly apiBaseUrl = 'http://localhost:8081';
+
+  protected readonly statusOptions = ['Pendiente', 'En progreso', 'Completada'];
+  protected readonly statusSelections = signal<Partial<Record<string, string>>>({});
 
   protected readonly tasks = signal<TaskResponse[]>([]);
   protected readonly taskLoading = signal(false);
   protected readonly taskError = signal<string | null>(null);
+
+  protected readonly taskCreationLoading = signal(false);
+  protected readonly taskCreationError = signal<string | null>(null);
+  protected readonly taskCreationMessage = signal<string | null>(null);
+
+  protected readonly taskUpdateLoading = signal<string | null>(null);
+  protected readonly taskUpdateError = signal<string | null>(null);
+  protected readonly taskUpdateMessage = signal<string | null>(null);
 
   protected readonly cleaningTasks = signal<CleaningTaskView[]>([]);
   protected readonly cleaningLoading = signal(false);
   protected readonly cleaningError = signal<string | null>(null);
   protected readonly cleaningMessage = signal<string | null>(null);
 
-  protected readonly tokenForm = this.fb.group({
-    token: ['']
+  protected readonly taskForm = this.fb.group({
+    description: ['', Validators.required],
+    assignedEmployee: ['', Validators.required],
+    status: ['Pendiente', Validators.required]
   });
 
   protected readonly cleaningForm = this.fb.group({
@@ -221,46 +280,112 @@ export class App implements OnInit {
   });
 
   ngOnInit(): void {
-    const tokenValue = this.tokenForm.value.token?.trim();
-    if (tokenValue) {
-      this.authToken = tokenValue;
-      this.loadTasks();
-    }
-  }
-
-  protected applyToken(): void {
-    const tokenValue = this.tokenForm.value.token?.trim();
-    this.authToken = tokenValue ?? '';
-    if (!this.authToken) {
-      this.taskError.set('Debes proporcionar un token JWT para consultar las tareas.');
-      this.tasks.set([]);
-      return;
-    }
     this.loadTasks();
   }
 
-  protected loadTasks(): void {
-    if (!this.authToken) {
-      this.taskError.set('Debes proporcionar un token JWT para consultar las tareas.');
-      this.tasks.set([]);
+  protected createTask(): void {
+    if (this.taskForm.invalid) {
+      this.taskForm.markAllAsTouched();
       return;
     }
 
+    const payload = this.taskForm.getRawValue();
+
+    this.taskCreationLoading.set(true);
+    this.taskCreationError.set(null);
+    this.taskCreationMessage.set(null);
+    this.taskUpdateMessage.set(null);
+    this.taskUpdateError.set(null);
+
+    this.http.post<TaskResponse>(`${this.apiBaseUrl}/tasks/create`, payload).subscribe({
+      next: (response) => {
+        this.taskCreationLoading.set(false);
+        this.taskCreationMessage.set('Tarea creada correctamente.');
+        this.taskForm.reset({
+          description: '',
+          assignedEmployee: '',
+          status: 'Pendiente'
+        });
+        const current = this.tasks();
+        const updatedTasks = [response, ...current];
+        this.tasks.set(updatedTasks);
+        this.statusSelections.set(this.buildStatusSelections(updatedTasks));
+      },
+      error: (error) => {
+        this.taskCreationLoading.set(false);
+        const message = this.resolveErrorMessage(error);
+        this.taskCreationError.set(message);
+      }
+    });
+  }
+
+  protected loadTasks(): void {
     this.taskLoading.set(true);
     this.taskError.set(null);
+    this.taskUpdateMessage.set(null);
+    this.taskUpdateError.set(null);
+
+    this.http.get<TaskResponse[]>(`${this.apiBaseUrl}/tasks/all`).subscribe({
+      next: (response) => {
+        const data = response ?? [];
+        this.tasks.set(data);
+        this.statusSelections.set(this.buildStatusSelections(data));
+        this.taskLoading.set(false);
+      },
+      error: (error) => {
+        const message = this.resolveErrorMessage(error);
+        this.taskError.set(message);
+        this.tasks.set([]);
+        this.statusSelections.set({});
+        this.taskLoading.set(false);
+      }
+    });
+  }
+
+  protected onStatusSelect(taskId: string, newStatus: string): void {
+    const currentSelections = { ...this.statusSelections() };
+    currentSelections[taskId] = newStatus;
+    this.statusSelections.set(currentSelections);
+    this.taskUpdateMessage.set(null);
+    this.taskUpdateError.set(null);
+  }
+
+  protected shouldEnableUpdate(taskId: string, currentStatus: string): boolean {
+    const selected = this.statusSelections()[taskId] ?? currentStatus;
+    return selected !== currentStatus;
+  }
+
+  protected updateTaskStatus(task: TaskResponse): void {
+    const targetStatus = this.statusSelections()[task.taskId] ?? task.status;
+    if (!targetStatus || targetStatus === task.status) {
+      return;
+    }
+
+    this.taskUpdateLoading.set(task.taskId);
+    this.taskUpdateError.set(null);
+    this.taskUpdateMessage.set(null);
+
+    const payload = {
+      ...task,
+      status: targetStatus
+    };
 
     this.http
-      .get<TaskResponse[]>(`${this.apiBaseUrl}/tasks/all`, { headers: this.buildAuthHeaders() })
+      .put<TaskResponse>(`${this.apiBaseUrl}/tasks/update/${task.taskId}`, payload)
       .subscribe({
         next: (response) => {
-          this.tasks.set(response ?? []);
-          this.taskLoading.set(false);
+          this.taskUpdateLoading.set(null);
+          this.taskUpdateMessage.set('Estado actualizado correctamente.');
+          const updatedTasks = this.tasks().map((item) =>
+            item.taskId === response.taskId ? { ...item, ...response } : item
+          );
+          this.tasks.set(updatedTasks);
+          this.statusSelections.set(this.buildStatusSelections(updatedTasks));
         },
         error: (error) => {
+          this.taskUpdateLoading.set(null);
           const message = this.resolveErrorMessage(error);
-          this.taskError.set(message);
-          this.tasks.set([]);
-          this.taskLoading.set(false);
+          this.taskUpdateError.set(message);
         }
       });
   }
@@ -323,15 +448,16 @@ export class App implements OnInit {
     return item.taskId ?? `${item.hotelName}-${item.roomCode}-${item.createdAt}`;
   }
 
-  protected fieldInvalid(field: 'hotelName' | 'roomCode'): boolean {
-    const control = this.cleaningForm.get(field);
+  protected fieldInvalid(form: FormGroup, field: string): boolean {
+    const control = form.get(field);
     return !!control && control.invalid && (control.dirty || control.touched);
   }
 
-  private buildAuthHeaders(): HttpHeaders {
-    return this.authToken
-      ? new HttpHeaders({ Authorization: `Bearer ${this.authToken}` })
-      : new HttpHeaders();
+  private buildStatusSelections(tasks: TaskResponse[]): Partial<Record<string, string>> {
+    return tasks.reduce((acc, task) => {
+      acc[task.taskId] = task.status;
+      return acc;
+    }, {} as Partial<Record<string, string>>);
   }
 
   private resolveErrorMessage(error: unknown): string {
@@ -348,10 +474,6 @@ export class App implements OnInit {
     }
 
     const maybeResponse = error as { status?: number; error?: { message?: string; error?: string } | string };
-
-    if (maybeResponse?.status === 401) {
-      return 'No autorizado. Verifica el token configurado.';
-    }
 
     if (maybeResponse?.status === 0) {
       return 'No fue posible conectar con el servicio. Asegúrate de que esté disponible en el puerto 8081.';
